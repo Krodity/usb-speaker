@@ -24,11 +24,15 @@ android {
         // keystore at the XDG path, and letting it drift produces APKs signed
         // with a different key than the ones already on the phones, failing an
         // update with INSTALL_FAILED_UPDATE_INCOMPATIBLE. See pc-remote.
-        getByName("debug") {
-            storeFile = File(System.getProperty("user.home"), ".config/.android/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
+        // Machines without that file keep AGP's default debug keystore.
+        val pinnedDebugKeystore = File(System.getProperty("user.home"), ".config/.android/debug.keystore")
+        if (pinnedDebugKeystore.exists()) {
+            getByName("debug") {
+                storeFile = pinnedDebugKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
         }
     }
 
