@@ -69,12 +69,14 @@ mode is never saved across reboots.
 
 ## The app
 
+<p align="center"><img src="docs/images/app.png" width="260" alt="USB Speaker app"></p>
+
 | Item | Meaning |
 |---|---|
 | **USB gadget** | `audio mode`, or the phone's normal USB function list (e.g. `adb`). The *Enable/Disable USB audio mode* button switches between them |
 | **USB link** | Controller state from `/sys/class/udc/*/state` (`configured` = a host is attached and has set up the device, otherwise `not connected`) |
 | **Gadget card** | The ALSA card the gadget registered, e.g. `hw:1,0`, or `not bound` |
-| **Host rate / Sample rate** | Rate advertised to the host, 44.1 or 48 kHz. Changing it reconnects USB, and the host may re-pick the device |
+| **Host rate / Sample rate** | Rate advertised to the host: 44.1, 48 or 96 kHz (48 recommended). Changing it reconnects USB, and the host may re-pick the device |
 | **Pump** | `Stopped`, `Waiting for PC to start playback`, `playing`, or `Error` with a reason |
 | **Level** | Live peak meter of the incoming audio |
 | **Start / Stop speaker** | Runs the foreground service that pumps audio |
