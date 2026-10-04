@@ -1,0 +1,14 @@
+# USB Speaker — keep adb reachable while the phone is in UAC2 gadget mode.
+#
+# Switching the gadget to Qualcomm's `diag,uac2,adb` combo re-enumerates the
+# device under QUALCOMM's ids (05c6) instead of Google's (18d1), which the
+# usual Android udev rules cover. Without this, adbd keeps running on
+# the phone but the host shows the device as `no permissions`.
+#
+#   05c6:90ca = diag,uac2,adb   (the combo we use)
+#   05c6:901c = diag,uac2       (same combo minus adb)
+#
+# Install: sudo cp packaging/99-android-uac2.rules /etc/udev/rules.d/ \
+#          && sudo udevadm control --reload
+SUBSYSTEM=="usb", ATTR{idVendor}=="05c6", ATTR{idProduct}=="90ca", TAG+="uaccess"
+SUBSYSTEM=="usb", ATTR{idVendor}=="05c6", ATTR{idProduct}=="901c", TAG+="uaccess"

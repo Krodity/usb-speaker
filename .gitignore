@@ -1,0 +1,10 @@
+# Gradle / Android build output
+phone/.gradle/
+phone/.kotlin/
+phone/build/
+phone/app/build/
+phone/local.properties
+*.apk
+*.keystore
+.idea/
+.DS_Store

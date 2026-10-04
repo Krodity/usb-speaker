@@ -1,0 +1,114 @@
+#!/usr/bin/env bash
+# usb-speaker-mode -- flip the phone's USB gadget between normal adb and
+# UAC2 audio-gadget mode, so it enumerates on this PC as a real USB sound card.
+#
+# Usage: usb-speaker-mode {on|off|status} [serial]
+#
+# HOW THIS WORKS
+#   Qualcomm's /vendor/etc/init/hw/init.qcom.usb.rc ships a first-class combo:
+#
+#     on property:sys.usb.config=diag,uac2,adb && property:sys.usb.configfs=1
+#         ... symlink ffs.adb -> configs/b.1/f2
+#         ... symlink uac2.0  -> configs/b.1/f3
+#         ... write /config/usb_gadget/g1/UDC ${sys.usb.controller}
+#
+#   So setting one property makes *init* rebuild the gadget atomically and
+#   re-bind the UDC. That is far safer than hand-editing ConfigFS, because
+#   android.hardware.usb@1.2-service-qti owns that tree and will fight (and
+#   overwrite) manual symlinks on the next USB state change.
+#
+#   The combo keeps adb, so we do not lose the shell.
+#
+# SAFETY
+#   We only ever set `sys.usb.config` (runtime), never
+#   `persist.sys.usb.config` (which stays "adb"). sys.usb.config is not
+#   persisted, so *a reboot always restores plain adb mode*. If anything goes
+#   wrong, unplug/replug or reboot the phone and you are back to normal.
+#
+#   Note the combo re-enumerates under Qualcomm's ids 05c6:90ca rather than
+#   Google's 18d1:4ee7, so packaging/99-android-uac2.rules must be installed
+#   or adb will come back as "no permissions".
+set -euo pipefail
+
+MODE="${1:-status}"
+SERIAL="${2:-}"
+
+ADB=(adb)
+[[ -n "$SERIAL" ]] && ADB=(adb -s "$SERIAL")
+
+die() { echo "error: $*" >&2; exit 1; }
+
+sh_root() { "${ADB[@]}" shell "su -c '$1'" 2>/dev/null | tr -d '\r'; }
+
+require_device() {
+  local state
+  state="$("${ADB[@]}" get-state 2>/dev/null | tr -d '\r' || true)"
+  [[ "$state" == "device" ]] || die "no device in 'device' state (got '${state:-none}'). Check: adb devices -l"
+  [[ "$(sh_root 'id -u')" == "0" ]] || die "root (su) not available on this device"
+}
+
+# Wait for the device to come back after the USB re-enumeration.
+wait_back() {
+  local n=0
+  # It drops off the bus first; give it a moment before polling.
+  sleep 2
+  while (( n < 30 )); do
+    if [[ "$("${ADB[@]}" get-state 2>/dev/null | tr -d '\r' || true)" == "device" ]]; then
+      return 0
+    fi
+    sleep 1; ((n++))
+  done
+  return 1
+}
+
+case "$MODE" in
+  on)
+    require_device
+    echo "==> switching gadget to diag,uac2,adb"
+    # Fire and forget: the property change tears down USB underneath us, so
+    # this command's own adb channel dies. That is expected, not a failure.
+    "${ADB[@]}" shell "su -c 'setprop sys.usb.config diag,uac2,adb'" >/dev/null 2>&1 || true
+    if wait_back; then
+      echo "==> device back: $(sh_root 'getprop sys.usb.state')"
+    else
+      echo "!! device did not return over adb within 30s." >&2
+      echo "   The audio gadget may still be up -- check 'aplay -l' on this PC." >&2
+      echo "   To recover adb: unplug/replug, or reboot the phone." >&2
+    fi
+    ;;
+  off)
+    require_device
+    echo "==> restoring gadget to adb"
+    "${ADB[@]}" shell "su -c 'setprop sys.usb.config adb'" >/dev/null 2>&1 || true
+    if wait_back; then
+      echo "==> device back: $(sh_root 'getprop sys.usb.state')"
+    else
+      echo "!! device did not return within 30s; unplug/replug or reboot." >&2
+    fi
+    ;;
+  recover)
+    # For when the gadget has been left unbound and the phone presents no USB
+    # device at all. Only usable if adb is somehow still alive -- if it is not,
+    # the fix is to reboot the phone: sys.usb.config is not persisted, so boot
+    # restores persist.sys.usb.config (adb).
+    require_device
+    echo "==> rebinding gadget"
+    sh_root 'setprop sys.usb.config adb'
+    sleep 2
+    sh_root 'C=$(getprop sys.usb.controller); [ -z "$(cat /config/usb_gadget/g1/UDC)" ] && echo $C > /config/usb_gadget/g1/UDC; cat /config/usb_gadget/g1/UDC'
+    echo "==> state: $(sh_root 'getprop sys.usb.state')"
+    ;;
+  status)
+    require_device
+    echo "sys.usb.config  = $(sh_root 'getprop sys.usb.config')"
+    echo "sys.usb.state   = $(sh_root 'getprop sys.usb.state')"
+    echo "persist.config  = $(sh_root 'getprop persist.sys.usb.config')  (reboot restores this)"
+    echo "b.1 functions   :"
+    sh_root 'ls -l /config/usb_gadget/g1/configs/b.1/ | grep ^l' | sed 's/^/  /'
+    echo "gadget cards on phone:"
+    sh_root 'cat /proc/asound/cards' | sed 's/^/  /'
+    ;;
+  *)
+    die "usage: usb-speaker-mode {on|off|recover|status} [serial]"
+    ;;
+esac

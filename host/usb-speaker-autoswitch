@@ -1,0 +1,118 @@
+#!/usr/bin/env bash
+# usb-speaker-autoswitch -- make the phone behave like a speaker you plug in.
+#
+# Watches PipeWire for the phone's UAC2 sink appearing and disappearing. When
+# it appears: remember the current default sink, make the phone the default,
+# and move already-playing streams over. When it goes: put everything back.
+#
+# Run in the foreground, or via the packaged user unit:
+#   systemctl --user enable --now usb-speaker-autoswitch
+#
+# Why event-driven rather than a udev rule: udev fires when the *kernel* sees
+# the USB device, which is well before PipeWire has created the sink node, so a
+# udev-triggered `pactl set-default-sink` reliably loses the race. pactl's own
+# event stream fires when the sink actually exists.
+set -uo pipefail
+
+# Matches the PipeWire sink name for the phone's audio gadget. The gadget
+# enumerates under the phone's USB product string, so this matches loosely
+# rather than pinning a full node name that changes with the serial.
+MATCH="${USB_SPEAKER_MATCH:-Razer_Edge}"
+
+STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/usb-speaker"
+PREV_FILE="$STATE_DIR/previous-default-sink"
+mkdir -p "$STATE_DIR"
+
+log() { printf '%s usb-speaker-autoswitch: %s\n' "$(date '+%H:%M:%S')" "$*"; }
+
+phone_sink() {
+  pactl list short sinks 2>/dev/null | awk -v m="$MATCH" '$2 ~ m {print $2; exit}'
+}
+
+current_default() {
+  pactl get-default-sink 2>/dev/null
+}
+
+attach() {
+  local sink="$1"
+  local cur
+  cur="$(current_default)"
+  [[ "$cur" == "$sink" ]] && return 0
+
+  # Only record the previous default if we aren't already attached, otherwise a
+  # second event would overwrite it with the phone itself and we'd have nothing
+  # to restore to.
+  [[ -n "$cur" ]] && printf '%s\n' "$cur" > "$PREV_FILE"
+
+  log "phone sink appeared -> making it default (was ${cur:-none})"
+  pactl set-default-sink "$sink" || return 1
+
+  # Move anything already playing, so you don't have to restart the app that
+  # was mid-stream when you plugged in.
+  pactl list short sink-inputs 2>/dev/null | while read -r id _; do
+    pactl move-sink-input "$id" "$sink" 2>/dev/null
+  done
+
+  # PipeWire gives a freshly seen USB sink a conservative default volume
+  # (40% / -23.9 dB here), which reads as "the phone is really quiet" and sends
+  # you hunting through the phone's mixer for a problem that is on this end.
+  pactl set-sink-volume "$sink" "${USB_SPEAKER_VOLUME:-100%}" 2>/dev/null
+  pactl set-sink-mute "$sink" 0 2>/dev/null
+}
+
+detach() {
+  local prev=""
+  [[ -f "$PREV_FILE" ]] && prev="$(cat "$PREV_FILE")"
+  [[ -z "$prev" ]] && return 0
+
+  # Only restore if that sink still exists (a headset may have gone too).
+  if pactl list short sinks 2>/dev/null | awk '{print $2}' | grep -qx "$prev"; then
+    log "phone sink gone -> restoring default to $prev"
+    pactl set-default-sink "$prev"
+    pactl list short sink-inputs 2>/dev/null | while read -r id _; do
+      pactl move-sink-input "$id" "$prev" 2>/dev/null
+    done
+  else
+    log "phone sink gone; previous default $prev no longer exists, leaving as-is"
+  fi
+  rm -f "$PREV_FILE"
+}
+
+sync_once() {
+  local sink
+  sink="$(phone_sink)"
+  if [[ -n "$sink" ]]; then attach "$sink"; else detach; fi
+}
+
+log "watching for sinks matching '$MATCH'"
+sync_once
+
+# `pactl subscribe` emits a line per server event. Sink add/remove is what we
+# care about; everything else is noise, but re-syncing on it is cheap and
+# idempotent, so we don't try to parse precisely.
+#
+# Read through a fifo rather than `pactl subscribe | while read`: a pipeline
+# puts the loop in a SUBSHELL, so the trap below never runs in the process that
+# owns the loop, and killing this script leaves `pactl subscribe` orphaned and
+# running forever. With a fifo the loop stays in the main shell and we hold the
+# child's pid to reap it.
+SUB_FIFO="$STATE_DIR/events.$$"
+mkfifo "$SUB_FIFO" 2>/dev/null || { log "could not create $SUB_FIFO"; exit 1; }
+pactl subscribe > "$SUB_FIFO" 2>/dev/null &
+SUB_PID=$!
+
+cleanup() {
+  trap - INT TERM EXIT
+  kill "$SUB_PID" 2>/dev/null
+  rm -f "$SUB_FIFO"
+  # Don't leave the session pointing at a phone that is no longer there.
+  detach
+  exit 0
+}
+trap cleanup INT TERM EXIT
+
+while read -r line; do
+  case "$line" in
+    *"on sink"*|*"on server"*) sync_once ;;
+  esac
+done < "$SUB_FIFO"

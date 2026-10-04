@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+
+    <application
+        android:allowBackup="false"
+        android:icon="@android:drawable/stat_sys_headset"
+        android:label="USB Speaker"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.UsbSpeaker">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:label="USB Speaker"
+            android:launchMode="singleTask">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <service
+            android:name=".SpeakerService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
+
+        <!--
+          Arms the speaker service without anyone opening the app.
+
+          These broadcasts only wake the service; UsbWatcher inside it does the
+          actual host detection by polling the USB device controller's state,
+          because Android has no public broadcast meaning "a host plugged me in"
+          while acting as a peripheral (USB_DEVICE_ATTACHED is the opposite
+          case, and POWER_CONNECTED cannot tell a PC from a wall charger).
+        -->
+        <receiver
+            android:name=".PlugReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.ACTION_POWER_CONNECTED" />
+                <action android:name="android.intent.action.ACTION_POWER_DISCONNECTED" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>

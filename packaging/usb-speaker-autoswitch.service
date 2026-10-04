@@ -1,0 +1,16 @@
+[Unit]
+Description=Switch audio output to the phone when its USB speaker appears
+Documentation=https://github.com/Krodity/usb-speaker
+# PipeWire must be up before we can subscribe to its events.
+After=pipewire.service pipewire-pulse.service
+Wants=pipewire.service
+
+[Service]
+Type=simple
+# Install the script first: install -Dm755 host/usb-speaker-autoswitch ~/.local/bin/
+ExecStart=%h/.local/bin/usb-speaker-autoswitch
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target
